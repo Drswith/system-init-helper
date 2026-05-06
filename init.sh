@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+SCRIPT_START=$(date +%s)
 LOG_FILE="/tmp/system-init-$(date +%Y%m%d_%H%M%S).log"
 
 RED='\033[0;31m'
@@ -11,9 +12,56 @@ CYAN='\033[0;36m'
 BOLD='\033[1m'
 NC='\033[0m'
 
-log()   { echo -e "${GREEN}[INFO]${NC}  $*" | tee -a "$LOG_FILE"; }
-warn()  { echo -e "${YELLOW}[WARN]${NC}  $*" | tee -a "$LOG_FILE"; }
-error() { echo -e "${RED}[ERROR]${NC} $*" | tee -a "$LOG_FILE"; }
+SPINNER_PID=""
+STEP_START=0
+
+spinner() {
+    local chars='⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏'
+    while true; do
+        for ((i=0; i<${#chars}; i++)); do
+            printf "\r  ${CYAN}${chars:$i:1}${NC} $*..."
+            sleep 0.1
+        done
+    done
+}
+
+start_spinner() {
+    STEP_START=$(date +%s)
+    spinner "$*" &
+    SPINNER_PID=$!
+}
+
+stop_spinner() {
+    if [[ -n "$SPINNER_PID" ]] && kill -0 "$SPINNER_PID" 2>/dev/null; then
+        kill "$SPINNER_PID" 2>/dev/null
+        wait "$SPINNER_PID" 2>/dev/null || true
+    fi
+    local elapsed=0
+    if [[ "$STEP_START" -gt 0 ]]; then
+        elapsed=$(( $(date +%s) - STEP_START ))
+    fi
+    printf "\r%*s\r" 60 ""
+    if [[ "$elapsed" -gt 0 ]]; then
+        echo -e "  ${DIM}(${elapsed}s)${NC}" | tee -a "$LOG_FILE"
+    fi
+    SPINNER_PID=""
+}
+
+step_elapsed() {
+    local elapsed=0
+    if [[ "$STEP_START" -gt 0 ]]; then
+        elapsed=$(( $(date +%s) - STEP_START ))
+    fi
+    if [[ "$elapsed" -gt 0 ]]; then
+        echo -e "  ${DIM}(${elapsed}s)${NC}" | tee -a "$LOG_FILE"
+    fi
+}
+
+DIM='\033[0;2m'
+
+log()   { stop_spinner; echo -e "${GREEN}[INFO]${NC}  $*" | tee -a "$LOG_FILE"; }
+warn()  { stop_spinner; echo -e "${YELLOW}[WARN]${NC}  $*" | tee -a "$LOG_FILE"; }
+error() { stop_spinner; echo -e "${RED}[ERROR]${NC} $*" | tee -a "$LOG_FILE"; }
 step()  { echo -e "\n${BOLD}${BLUE}====> $* <====${NC}" | tee -a "$LOG_FILE"; }
 ok()    { echo -e "${GREEN}[OK]${NC}    $*" | tee -a "$LOG_FILE"; }
 
@@ -57,14 +105,19 @@ ok "Preflight passed. Log file: $LOG_FILE"
 next_step "Configuring Ubuntu mirror source (Aliyun)"
 
 SOURCES_LIST="/etc/apt/sources.list"
+SOURCES_DEB822="/etc/apt/sources.list.d/ubuntu.sources"
 SOURCES_BACKUP="/etc/apt/sources.list.bak.$(date +%Y%m%d%H%M%S)"
 
-if grep -q "mirrors.aliyun.com" "$SOURCES_LIST" 2>/dev/null; then
-    warn "Aliyun mirror already configured in $SOURCES_LIST, skipping."
+if grep -q "mirrors.aliyun.com" "$SOURCES_LIST" 2>/dev/null || grep -q "mirrors.aliyun.com" "$SOURCES_DEB822" 2>/dev/null; then
+    warn "Aliyun mirror already configured, skipping."
 else
     if [[ -f "$SOURCES_LIST" ]]; then
         cp "$SOURCES_LIST" "$SOURCES_BACKUP"
         log "Backed up original sources.list to $SOURCES_BACKUP"
+    fi
+    if [[ -f "$SOURCES_DEB822" ]]; then
+        cp "$SOURCES_DEB822" "${SOURCES_DEB822}.bak.$(date +%Y%m%d%H%M%S)"
+        log "Backed up ubuntu.sources"
     fi
 
     cat > "$SOURCES_LIST" <<EOF
@@ -80,8 +133,15 @@ deb-src http://mirrors.aliyun.com/ubuntu/ $CODENAME-updates main restricted univ
 deb-src http://mirrors.aliyun.com/ubuntu/ $CODENAME-backports main restricted universe multiverse
 EOF
 
+    if [[ -f "$SOURCES_DEB822" ]]; then
+        rm -f "$SOURCES_DEB822"
+        log "Removed DEB822 format ubuntu.sources to avoid duplicate sources."
+    fi
+
     log "Running apt-get update..."
+    start_spinner "Updating package index"
     apt-get update -qq
+    stop_spinner
     ok "Ubuntu mirror source configured and updated."
 fi
 
@@ -109,7 +169,9 @@ BASE_PACKAGES=(
 )
 
 log "Installing: ${BASE_PACKAGES[*]}"
+start_spinner "Installing base packages (${#BASE_PACKAGES[@]} packages)"
 apt-get install -y -qq "${BASE_PACKAGES[@]}"
+stop_spinner
 
 ln -sf "$(which fdfind)" /usr/local/bin/fd 2>/dev/null || true
 ln -sf "$(which batcat)" /usr/local/bin/bat 2>/dev/null || true
@@ -125,7 +187,9 @@ CURRENT_USER="${SUDO_USER:-${USER:-root}}"
 CURRENT_USER_HOME=$(eval echo "~$CURRENT_USER")
 
 log "Installing zsh..."
+start_spinner "Installing zsh"
 apt-get install -y -qq zsh
+stop_spinner
 
 ZSH_VERSION=$(zsh --version)
 log "$ZSH_VERSION installed."
@@ -143,7 +207,9 @@ OH_MY_ZSH_DIR="$CURRENT_USER_HOME/.oh-my-zsh"
 
 if [[ ! -d "$OH_MY_ZSH_DIR" ]]; then
     log "Installing Oh-My-Zsh from Gitee mirror..."
+    start_spinner "Cloning Oh-My-Zsh from Gitee"
     git clone --depth=1 https://gitee.com/mirrors/oh-my-zsh.git "$OH_MY_ZSH_DIR"
+    stop_spinner
     chown -R "$CURRENT_USER:$CURRENT_USER" "$OH_MY_ZSH_DIR"
 
     ZSHRC="$CURRENT_USER_HOME/.zshrc"
@@ -196,10 +262,14 @@ if ! command_exists fnm; then
 
     FNM_TMP=$(mktemp -d)
     log "Downloading fnm ($FNM_FILE) via gh-proxy..."
+    start_spinner "Downloading fnm binary"
     if ! curl --progress-bar --fail -L "https://gh-proxy.com/${FNM_URL}" -o "$FNM_TMP/fnm.zip" 2>/dev/null; then
+        stop_spinner
         warn "gh-proxy.com failed, trying GitHub directly..."
+        start_spinner "Downloading fnm from GitHub"
         curl --progress-bar --fail -L "$FNM_URL" -o "$FNM_TMP/fnm.zip" || fail "Failed to download fnm from both sources."
     fi
+    stop_spinner
 
     mkdir -p "$FNM_DIR"
     unzip -q -o "$FNM_TMP/fnm.zip" -d "$FNM_TMP/out"
@@ -220,6 +290,7 @@ log "Configuring fnm for zsh..."
 ZSHRC="$CURRENT_USER_HOME/.zshrc"
 FNM_BLOCK="$CURRENT_USER_HOME/.zsh_fnm"
 cat > "$FNM_BLOCK" <<'EOF'
+export FNM_NODE_DIST_MIRROR="https://npmmirror.com/mirrors/node"
 export FNM_PATH="/usr/local/share/fnm"
 export PATH="$FNM_PATH:$PATH"
 eval "$(fnm env --use-on-cd --shell zsh)"
@@ -233,6 +304,7 @@ chown "$CURRENT_USER:$CURRENT_USER" "$FNM_BLOCK"
     fi
     source "$CURRENT_USER_HOME/.zsh_fnm" 2>/dev/null || true
 
+export FNM_NODE_DIST_MIRROR="https://npmmirror.com/mirrors/node"
 export FNM_PATH="$FNM_DIR"
 export PATH="$FNM_PATH:$PATH"
 eval "$(fnm env)"
@@ -242,7 +314,9 @@ if command_exists node; then
     warn "Node.js $NODE_VERSION already installed, skipping."
 else
     log "Installing Node.js LTS via fnm..."
+    start_spinner "Downloading and installing Node.js LTS"
     fnm install --lts
+    stop_spinner
     fnm use --install-if-missing lts/*
     NODE_VERSION=$(node -v)
     log "Node.js version: $NODE_VERSION"
@@ -273,7 +347,9 @@ next_step "Installing Bun"
 
 if ! command_exists bun; then
     log "Installing Bun via official install script (gh-proxy accelerated)..."
+    start_spinner "Downloading and installing Bun"
     GITHUB=https://gh-proxy.com/https://github.com curl -fsSL https://bun.sh/install | GITHUB=https://gh-proxy.com/https://github.com bash
+    stop_spinner
     export BUN_INSTALL="$HOME/.bun"
     export PATH="$BUN_INSTALL/bin:$PATH"
 
@@ -317,7 +393,9 @@ PYTHON_PKGS=(
 )
 
 log "Installing Python packages: ${PYTHON_PKGS[*]}"
+start_spinner "Installing Python packages"
 apt-get install -y -qq "${PYTHON_PKGS[@]}"
+stop_spinner
 
 PYTHON_VERSION=$(python3 --version)
 log "$PYTHON_VERSION installed."
@@ -347,7 +425,9 @@ EOF
 fi
 
 log "Installing common Python tools..."
+start_spinner "Upgrading pip, setuptools, wheel"
 pip3 install --quiet --break-system-packages --ignore-installed pip setuptools wheel
+stop_spinner
 
 ok "Python $PYTHON_VERSION + pip mirror configured."
 ok "pip index-url set to https://mirrors.aliyun.com/pypi/simple/"
@@ -355,9 +435,12 @@ ok "pip index-url set to https://mirrors.aliyun.com/pypi/simple/"
 # ──────────────────────────────────────────────
 # Done
 # ──────────────────────────────────────────────
+SCRIPT_END=$(date +%s)
+SCRIPT_TOTAL=$(( SCRIPT_END - SCRIPT_START ))
+
 echo ""
 echo -e "${BOLD}${GREEN}============================================================${NC}"
-echo -e "${BOLD}${GREEN}  All done! System initialization completed successfully.  ${NC}"
+echo -e "${BOLD}${GREEN}  All done! (${SCRIPT_TOTAL}s) System initialization completed.  ${NC}"
 echo -e "${BOLD}${GREEN}============================================================${NC}"
 echo ""
 echo -e "${CYAN}  Node.js:${NC}  $(node -v)"
