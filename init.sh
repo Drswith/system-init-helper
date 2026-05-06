@@ -290,9 +290,9 @@ log "Configuring fnm for zsh..."
 ZSHRC="$CURRENT_USER_HOME/.zshrc"
 FNM_BLOCK="$CURRENT_USER_HOME/.zsh_fnm"
 cat > "$FNM_BLOCK" <<'EOF'
+export FNM_DIR="/usr/local/share/fnm"
 export FNM_NODE_DIST_MIRROR="https://npmmirror.com/mirrors/node"
-export FNM_PATH="/usr/local/share/fnm"
-export PATH="$FNM_PATH:$PATH"
+export PATH="$FNM_DIR:$PATH"
 eval "$(fnm env --use-on-cd --shell zsh)"
 EOF
 chown "$CURRENT_USER:$CURRENT_USER" "$FNM_BLOCK"
@@ -304,9 +304,9 @@ chown "$CURRENT_USER:$CURRENT_USER" "$FNM_BLOCK"
     fi
     source "$CURRENT_USER_HOME/.zsh_fnm" 2>/dev/null || true
 
+export FNM_DIR="$FNM_DIR"
 export FNM_NODE_DIST_MIRROR="https://npmmirror.com/mirrors/node"
-export FNM_PATH="$FNM_DIR"
-export PATH="$FNM_PATH:$PATH"
+export PATH="$FNM_DIR:$PATH"
 eval "$(fnm env)"
 
 if command_exists node; then
@@ -317,10 +317,12 @@ else
     start_spinner "Downloading and installing Node.js LTS"
     fnm install --lts
     stop_spinner
-    fnm use --install-if-missing lts/*
+    fnm default "$(fnm current)"
     NODE_VERSION=$(node -v)
     log "Node.js version: $NODE_VERSION"
 fi
+
+chmod -R a+rx "$FNM_DIR/nodejs" 2>/dev/null || true
 
 NPM_REGISTRY=$(npm config get registry 2>/dev/null)
 if [[ "$NPM_REGISTRY" == *"npmmirror"* ]]; then
