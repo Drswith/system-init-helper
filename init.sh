@@ -79,7 +79,7 @@ get_ubuntu_codename() {
 }
 
 STEP_COUNT=0
-TOTAL_STEPS=6
+TOTAL_STEPS=7
 
 next_step() {
     STEP_COUNT=$((STEP_COUNT + 1))
@@ -433,6 +433,56 @@ ok "Python $PYTHON_VERSION + pip mirror configured."
 ok "pip index-url set to https://mirrors.aliyun.com/pypi/simple/"
 
 # ──────────────────────────────────────────────
+# 7. uv (Python package manager)
+# ──────────────────────────────────────────────
+next_step "Installing uv (Python package manager)"
+
+if ! command_exists uv; then
+    log "Installing uv via official install script (gh-proxy accelerated)..."
+    start_spinner "Downloading and installing uv"
+    UV_INSTALLER_URL="https://gh-proxy.com/https://github.com/astral-sh/uv/releases/latest/download/uv-installer.sh"
+    if ! curl -fsSL "$UV_INSTALLER_URL" | sh 2>/dev/null; then
+        stop_spinner
+        warn "gh-proxy.com failed, trying GitHub directly..."
+        start_spinner "Downloading uv from GitHub"
+        curl -fsSL https://astral.sh/uv/install.sh | sh || fail "Failed to install uv."
+    fi
+    stop_spinner
+
+    export UV_HOME="$HOME/.local/bin"
+    export PATH="$UV_HOME:$PATH"
+    ln -sf "$HOME/.local/bin/uv" /usr/local/bin/uv 2>/dev/null || true
+    ln -sf "$HOME/.local/bin/uvx" /usr/local/bin/uvx 2>/dev/null || true
+
+    UV_VERSION=$(uv --version 2>/dev/null | head -1)
+    ok "uv $UV_VERSION installed."
+else
+    warn "uv already installed, skipping."
+fi
+
+log "Configuring uv for zsh..."
+UV_BLOCK="$CURRENT_USER_HOME/.zsh_uv"
+if [[ -f "$UV_BLOCK" ]] && grep -q "zsh_uv" "$ZSHRC" 2>/dev/null; then
+    warn "uv zsh config already exists, skipping."
+else
+    cat > "$UV_BLOCK" <<'EOF'
+export UV_HOME="$HOME/.local/bin"
+export PATH="$UV_HOME:$PATH"
+EOF
+    chown "$CURRENT_USER:$CURRENT_USER" "$UV_BLOCK"
+
+    if ! grep -q "zsh_uv" "$ZSHRC" 2>/dev/null; then
+        echo '' >> "$ZSHRC"
+        echo 'source $HOME/.zsh_uv' >> "$ZSHRC"
+        chown "$CURRENT_USER:$CURRENT_USER" "$ZSHRC"
+    fi
+    source "$CURRENT_USER_HOME/.zsh_uv" 2>/dev/null || true
+    ok "uv zsh config written."
+fi
+
+ok "uv $(uv --version 2>/dev/null | awk '{print $2}') configured."
+
+# ──────────────────────────────────────────────
 # Done
 # ──────────────────────────────────────────────
 SCRIPT_END=$(date +%s)
@@ -448,6 +498,7 @@ echo -e "${CYAN}  npm:${NC}      $(npm -v)"
 echo -e "${CYAN}  Bun:${NC}      $(bun -v 2>/dev/null || echo 'run source /etc/profile.d/bun.sh first')"
 echo -e "${CYAN}  Python:${NC}   $(python3 --version)"
 echo -e "${CYAN}  pip:${NC}      $(pip3 --version | awk '{print $2}')"
+echo -e "${CYAN}  uv:${NC}       $(uv --version 2>/dev/null | awk '{print $2}' || echo 'not found')"
 echo -e "${CYAN}  Zsh:${NC}      $(zsh --version)"
 echo -e "${CYAN}  Shell:${NC}    zsh (for user $CURRENT_USER)"
 echo ""
