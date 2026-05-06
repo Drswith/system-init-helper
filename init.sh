@@ -59,12 +59,15 @@ next_step "Configuring Ubuntu mirror source (Aliyun)"
 SOURCES_LIST="/etc/apt/sources.list"
 SOURCES_BACKUP="/etc/apt/sources.list.bak.$(date +%Y%m%d%H%M%S)"
 
-if [[ -f "$SOURCES_LIST" ]]; then
-    cp "$SOURCES_LIST" "$SOURCES_BACKUP"
-    log "Backed up original sources.list to $SOURCES_BACKUP"
-fi
+if grep -q "mirrors.aliyun.com" "$SOURCES_LIST" 2>/dev/null; then
+    warn "Aliyun mirror already configured in $SOURCES_LIST, skipping."
+else
+    if [[ -f "$SOURCES_LIST" ]]; then
+        cp "$SOURCES_LIST" "$SOURCES_BACKUP"
+        log "Backed up original sources.list to $SOURCES_BACKUP"
+    fi
 
-cat > "$SOURCES_LIST" <<EOF
+    cat > "$SOURCES_LIST" <<EOF
 # Aliyun Mirror - Ubuntu $CODENAME
 deb http://mirrors.aliyun.com/ubuntu/ $CODENAME main restricted universe multiverse
 deb http://mirrors.aliyun.com/ubuntu/ $CODENAME-security main restricted universe multiverse
@@ -77,9 +80,10 @@ deb-src http://mirrors.aliyun.com/ubuntu/ $CODENAME-updates main restricted univ
 deb-src http://mirrors.aliyun.com/ubuntu/ $CODENAME-backports main restricted universe multiverse
 EOF
 
-log "Running apt-get update..."
-apt-get update -qq
-ok "Ubuntu mirror source configured and updated."
+    log "Running apt-get update..."
+    apt-get update -qq
+    ok "Ubuntu mirror source configured and updated."
+fi
 
 # ──────────────────────────────────────────────
 # 2. Base packages
@@ -126,9 +130,14 @@ apt-get install -y -qq zsh
 ZSH_VERSION=$(zsh --version)
 log "$ZSH_VERSION installed."
 
-log "Setting zsh as default shell for user $CURRENT_USER..."
-chsh -s "$(which zsh)" "$CURRENT_USER"
-ok "Default shell changed to zsh for $CURRENT_USER"
+CURRENT_SHELL=$(getent passwd "$CURRENT_USER" | cut -d: -f7)
+if [[ "$CURRENT_SHELL" == *"zsh"* ]]; then
+    warn "zsh is already the default shell for $CURRENT_USER, skipping."
+else
+    log "Setting zsh as default shell for user $CURRENT_USER..."
+    chsh -s "$(which zsh)" "$CURRENT_USER"
+    ok "Default shell changed to zsh for $CURRENT_USER"
+fi
 
 OH_MY_ZSH_DIR="$CURRENT_USER_HOME/.oh-my-zsh"
 
@@ -225,29 +234,35 @@ export FNM_PATH="$FNM_DIR"
 export PATH="$FNM_PATH:$PATH"
 eval "$(fnm env --use-on-cd --shell bash)"
 
-log "Installing Node.js LTS via fnm..."
-fnm install --lts
-fnm use --lts
-fnm default lts-latest
-
-NODE_VERSION=$(node -v)
-log "Node.js version: $NODE_VERSION"
-
-log "Configuring npm mirror (npmmirror)..."
-npm config set registry https://registry.npmmirror.com -g
-
-NPMRC="/etc/skel/.npmrc"
-cat > "$NPMRC" <<EOF
-registry=https://registry.npmmirror.com
-EOF
-
-NPMRC_GLOBAL="/usr/lib/node_modules/npm/npmrc"
-if [[ -f "$NPMRC_GLOBAL" ]]; then
-    echo "registry=https://registry.npmmirror.com" >> "$NPMRC_GLOBAL"
+if command_exists node; then
+    NODE_VERSION=$(node -v)
+    warn "Node.js $NODE_VERSION already installed, skipping."
+else
+    log "Installing Node.js LTS via fnm..."
+    fnm install --lts
+    fnm use --lts
+    fnm default lts-latest
+    NODE_VERSION=$(node -v)
+    log "Node.js version: $NODE_VERSION"
 fi
 
-ok "fnm + Node.js $NODE_VERSION + npmmirror configured."
-ok "npm registry set to https://registry.npmmirror.com"
+NPM_REGISTRY=$(npm config get registry 2>/dev/null)
+if [[ "$NPM_REGISTRY" == *"npmmirror"* ]]; then
+    warn "npm registry already set to npmmirror, skipping."
+else
+    log "Configuring npm mirror (npmmirror)..."
+    npm config set registry https://registry.npmmirror.com -g
+    ok "npm registry set to https://registry.npmmirror.com"
+fi
+
+NPMRC="/etc/skel/.npmrc"
+if [[ ! -f "$NPMRC" ]] || ! grep -q "npmmirror" "$NPMRC" 2>/dev/null; then
+    cat > "$NPMRC" <<EOF
+registry=https://registry.npmmirror.com
+EOF
+fi
+
+ok "fnm + Node.js $(node -v) + npmmirror configured."
 
 # ──────────────────────────────────────────────
 # 5. Bun
@@ -262,8 +277,17 @@ if ! command_exists bun; then
 
     ln -sf "$HOME/.bun/bin/bun" /usr/local/bin/bun 2>/dev/null || true
 
-    log "Configuring bun for zsh..."
-    BUN_BLOCK="$CURRENT_USER_HOME/.zsh_bun"
+    BUN_VERSION=$(bun -v)
+    ok "Bun $BUN_VERSION installed."
+else
+    warn "Bun already installed, skipping."
+fi
+
+log "Configuring bun for zsh..."
+BUN_BLOCK="$CURRENT_USER_HOME/.zsh_bun"
+if [[ -f "$BUN_BLOCK" ]] && grep -q "zsh_bun" "$ZSHRC" 2>/dev/null; then
+    warn "Bun zsh config already exists, skipping."
+else
     cat > "$BUN_BLOCK" <<'EOF'
 export BUN_INSTALL="$HOME/.bun"
 export PATH="$BUN_INSTALL/bin:$PATH"
@@ -275,11 +299,7 @@ EOF
         echo 'source $HOME/.zsh_bun' >> "$ZSHRC"
         chown "$CURRENT_USER:$CURRENT_USER" "$ZSHRC"
     fi
-
-    BUN_VERSION=$(bun -v)
-    ok "Bun $BUN_VERSION installed."
-else
-    warn "Bun already installed, skipping."
+    ok "Bun zsh config written."
 fi
 
 # ──────────────────────────────────────────────
@@ -300,24 +320,28 @@ PYTHON_VERSION=$(python3 --version)
 log "$PYTHON_VERSION installed."
 
 log "Configuring pip mirror (Aliyun)..."
-mkdir -p /etc/pip.conf.d
 PIP_CONF="/etc/pip.conf"
-cat > "$PIP_CONF" <<EOF
+if grep -q "mirrors.aliyun.com" "$PIP_CONF" 2>/dev/null; then
+    warn "pip mirror already configured, skipping."
+else
+    mkdir -p /etc/pip.conf.d
+    cat > "$PIP_CONF" <<EOF
 [global]
 index-url = https://mirrors.aliyun.com/pypi/simple/
 trusted-host = mirrors.aliyun.com
 EOF
+    chmod 644 "$PIP_CONF"
 
-chmod 644 "$PIP_CONF"
-
-for USER_SKELETON in /etc/skel /root; do
-    mkdir -p "$USER_SKELETON/.pip"
-    cat > "$USER_SKELETON/.pip/pip.conf" <<EOF
+    for USER_SKELETON in /etc/skel /root; do
+        mkdir -p "$USER_SKELETON/.pip"
+        cat > "$USER_SKELETON/.pip/pip.conf" <<EOF
 [global]
 index-url = https://mirrors.aliyun.com/pypi/simple/
 trusted-host = mirrors.aliyun.com
 EOF
-done
+    done
+    ok "pip mirror configured."
+fi
 
 log "Installing common Python tools..."
 pip3 install --quiet --upgrade pip setuptools wheel
