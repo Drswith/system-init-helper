@@ -121,7 +121,7 @@ ok "Base packages installed."
 # ──────────────────────────────────────────────
 next_step "Installing Zsh and Oh-My-Zsh with Gitee mirror"
 
-CURRENT_USER="${SUDO_USER:-$USER}"
+CURRENT_USER="${SUDO_USER:-${USER:-root}}"
 CURRENT_USER_HOME=$(eval echo "~$CURRENT_USER")
 
 log "Installing zsh..."
@@ -171,6 +171,8 @@ EOF
 else
     warn "Oh-My-Zsh already installed at $OH_MY_ZSH_DIR, skipping."
 fi
+
+source "$CURRENT_USER_HOME/.zshrc" 2>/dev/null || true
 
 ok "Zsh + Oh-My-Zsh (Gitee mirror) configured."
 
@@ -224,15 +226,16 @@ eval "$(fnm env --use-on-cd --shell zsh)"
 EOF
 chown "$CURRENT_USER:$CURRENT_USER" "$FNM_BLOCK"
 
-if ! grep -q "zsh_fnm" "$ZSHRC" 2>/dev/null; then
-    echo '' >> "$ZSHRC"
-    echo 'source $HOME/.zsh_fnm' >> "$ZSHRC"
-    chown "$CURRENT_USER:$CURRENT_USER" "$ZSHRC"
-fi
+    if ! grep -q "zsh_fnm" "$ZSHRC" 2>/dev/null; then
+        echo '' >> "$ZSHRC"
+        echo 'source $HOME/.zsh_fnm' >> "$ZSHRC"
+        chown "$CURRENT_USER:$CURRENT_USER" "$ZSHRC"
+    fi
+    source "$CURRENT_USER_HOME/.zsh_fnm" 2>/dev/null || true
 
 export FNM_PATH="$FNM_DIR"
 export PATH="$FNM_PATH:$PATH"
-eval "$(fnm env --use-on-cd --shell bash)"
+eval "$(fnm env)"
 
 if command_exists node; then
     NODE_VERSION=$(node -v)
@@ -240,8 +243,7 @@ if command_exists node; then
 else
     log "Installing Node.js LTS via fnm..."
     fnm install --lts
-    fnm use --lts
-    fnm default lts-latest
+    fnm use --install-if-missing lts/*
     NODE_VERSION=$(node -v)
     log "Node.js version: $NODE_VERSION"
 fi
@@ -299,6 +301,7 @@ EOF
         echo 'source $HOME/.zsh_bun' >> "$ZSHRC"
         chown "$CURRENT_USER:$CURRENT_USER" "$ZSHRC"
     fi
+    source "$CURRENT_USER_HOME/.zsh_bun" 2>/dev/null || true
     ok "Bun zsh config written."
 fi
 
@@ -344,7 +347,7 @@ EOF
 fi
 
 log "Installing common Python tools..."
-pip3 install --quiet --upgrade pip setuptools wheel
+pip3 install --quiet --break-system-packages --ignore-installed pip setuptools wheel
 
 ok "Python $PYTHON_VERSION + pip mirror configured."
 ok "pip index-url set to https://mirrors.aliyun.com/pypi/simple/"
@@ -366,5 +369,5 @@ echo -e "${CYAN}  Zsh:${NC}      $(zsh --version)"
 echo -e "${CYAN}  Shell:${NC}    zsh (for user $CURRENT_USER)"
 echo ""
 echo -e "${YELLOW}  Log file: $LOG_FILE${NC}"
-echo -e "${YELLOW}  Open a new terminal (zsh) to load the environment.${NC}"
+echo -e "${YELLOW}  Run 'source ~/.zshrc' or open a new terminal to load the environment.${NC}"
 echo ""
