@@ -79,7 +79,7 @@ get_ubuntu_codename() {
 }
 
 STEP_COUNT=0
-TOTAL_STEPS=7
+TOTAL_STEPS=8
 
 next_step() {
     STEP_COUNT=$((STEP_COUNT + 1))
@@ -485,6 +485,41 @@ fi
 ok "uv $(uv --version 2>/dev/null | awk '{print $2}') configured."
 
 # ──────────────────────────────────────────────
+# 8. GitHub CLI
+# ──────────────────────────────────────────────
+next_step "Installing GitHub CLI (gh)"
+
+if ! command_exists gh; then
+    log "Adding GitHub CLI apt repository..."
+    mkdir -p -m 755 /etc/apt/keyrings
+
+    GPG_KEYRING="/etc/apt/keyrings/githubcli-archive-keyring.gpg"
+    log "Downloading GitHub CLI keyring..."
+    start_spinner "Downloading keyring"
+    if ! curl -fsSL "https://gh-proxy.com/https://cli.github.com/packages/githubcli-archive-keyring.gpg" -o "$GPG_KEYRING" 2>/dev/null; then
+        stop_spinner
+        warn "gh-proxy.com failed, trying directly..."
+        start_spinner "Downloading keyring from cli.github.com"
+        curl -fsSL "https://cli.github.com/packages/githubcli-archive-keyring.gpg" -o "$GPG_KEYRING" || fail "Failed to download GitHub CLI keyring."
+    fi
+    stop_spinner
+    chmod go+r "$GPG_KEYRING"
+
+    echo "deb [arch=$(dpkg --print-architecture) signed-by=$GPG_KEYRING] https://cli.github.com/packages stable main" | tee /etc/apt/sources.list.d/github-cli.list > /dev/null
+
+    log "Updating package index and installing gh..."
+    start_spinner "Installing gh via apt"
+    apt-get update -qq 2>/dev/null
+    apt-get install -y -qq gh
+    stop_spinner
+
+    GH_VERSION=$(gh --version | head -1 | awk '{print $3}')
+    ok "GitHub CLI $GH_VERSION installed."
+else
+    warn "GitHub CLI already installed, skipping."
+fi
+
+# ──────────────────────────────────────────────
 # Done
 # ──────────────────────────────────────────────
 SCRIPT_END=$(date +%s)
@@ -501,6 +536,7 @@ echo -e "${CYAN}  Bun:${NC}      $(bun -v 2>/dev/null || echo 'run source /etc/p
 echo -e "${CYAN}  Python:${NC}   $(python3 --version)"
 echo -e "${CYAN}  pip:${NC}      $(pip3 --version | awk '{print $2}')"
 echo -e "${CYAN}  uv:${NC}       $(uv --version 2>/dev/null | awk '{print $2}' || echo 'not found')"
+echo -e "${CYAN}  gh:${NC}       $(gh --version 2>/dev/null | awk '{print $3}' | head -1 || echo 'not found')"
 echo -e "${CYAN}  Zsh:${NC}      $(zsh --version)"
 echo -e "${CYAN}  Shell:${NC}    zsh (for user $CURRENT_USER)"
 echo ""
