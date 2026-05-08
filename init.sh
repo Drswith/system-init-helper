@@ -79,7 +79,7 @@ get_ubuntu_codename() {
 }
 
 STEP_COUNT=0
-TOTAL_STEPS=8
+TOTAL_STEPS=10
 
 next_step() {
     STEP_COUNT=$((STEP_COUNT + 1))
@@ -520,6 +520,162 @@ else
 fi
 
 # ──────────────────────────────────────────────
+# 9. Rust (rustup + stable toolchain + crates mirror)
+# ──────────────────────────────────────────────
+next_step "Installing Rust toolchain (USTC mirror)"
+
+RUSTUP_HOME="/usr/local/share/rustup"
+CARGO_HOME="/usr/local/share/cargo"
+
+if ! command_exists rustc; then
+    log "Installing rustup + Rust stable via USTC mirror..."
+    mkdir -p "$RUSTUP_HOME" "$CARGO_HOME"
+
+    start_spinner "Downloading and installing Rust stable"
+    RUSTUP_HOME="$RUSTUP_HOME" CARGO_HOME="$CARGO_HOME" \
+        RUSTUP_DIST_SERVER="https://mirrors.ustc.edu.cn/rust-static" \
+        RUSTUP_UPDATE_ROOT="https://mirrors.ustc.edu.cn/rust-static/rustup" \
+        curl -fsSL https://sh.rustup.rs | \
+        RUSTUP_HOME="$RUSTUP_HOME" CARGO_HOME="$CARGO_HOME" \
+        RUSTUP_DIST_SERVER="https://mirrors.ustc.edu.cn/rust-static" \
+        RUSTUP_UPDATE_ROOT="https://mirrors.ustc.edu.cn/rust-static/rustup" \
+        sh -s -- -y --no-modify-path 2>/dev/null || fail "Failed to install Rust."
+    stop_spinner
+
+    export RUSTUP_HOME="$RUSTUP_HOME"
+    export CARGO_HOME="$CARGO_HOME"
+    export PATH="$CARGO_HOME/bin:$PATH"
+
+    ln -sf "$CARGO_HOME/bin/rustc" /usr/local/bin/rustc 2>/dev/null || true
+    ln -sf "$CARGO_HOME/bin/cargo" /usr/local/bin/cargo 2>/dev/null || true
+    ln -sf "$CARGO_HOME/bin/rustup" /usr/local/bin/rustup 2>/dev/null || true
+
+    RUST_VERSION=$(rustc --version 2>/dev/null | awk '{print $2}')
+    ok "Rust $RUST_VERSION installed."
+else
+    warn "Rust already installed, skipping."
+fi
+
+log "Configuring Rust for zsh..."
+RUST_BLOCK="$CURRENT_USER_HOME/.zsh_rust"
+if [[ -f "$RUST_BLOCK" ]] && grep -q "zsh_rust" "$ZSHRC" 2>/dev/null; then
+    warn "Rust zsh config already exists, skipping."
+else
+    cat > "$RUST_BLOCK" <<'EOF'
+export RUSTUP_HOME="/usr/local/share/rustup"
+export CARGO_HOME="/usr/local/share/cargo"
+export RUSTUP_DIST_SERVER="https://mirrors.ustc.edu.cn/rust-static"
+export RUSTUP_UPDATE_ROOT="https://mirrors.ustc.edu.cn/rust-static/rustup"
+export PATH="$CARGO_HOME/bin:$PATH"
+EOF
+    chown "$CURRENT_USER:$CURRENT_USER" "$RUST_BLOCK"
+
+    if ! grep -q "zsh_rust" "$ZSHRC" 2>/dev/null; then
+        echo '' >> "$ZSHRC"
+        echo 'source $HOME/.zsh_rust' >> "$ZSHRC"
+        chown "$CURRENT_USER:$CURRENT_USER" "$ZSHRC"
+    fi
+    source "$CURRENT_USER_HOME/.zsh_rust" 2>/dev/null || true
+    ok "Rust zsh config written."
+fi
+
+log "Configuring cargo crates.io mirror (USTC)..."
+CARGO_CONFIG="$CARGO_HOME/config.toml"
+mkdir -p "$CARGO_HOME"
+if grep -q "mirrors.ustc.edu.cn" "$CARGO_CONFIG" 2>/dev/null; then
+    warn "cargo mirror already configured, skipping."
+else
+    cat > "$CARGO_CONFIG" <<EOF
+[source.crates-io]
+replace-with = "ustc"
+
+[source.ustc]
+registry = "https://mirrors.ustc.edu.cn/crates.io-index"
+EOF
+    chmod 644 "$CARGO_CONFIG"
+    ok "cargo mirror configured to USTC."
+fi
+
+ok "Rust $(rustc --version 2>/dev/null | awk '{print $2}') + USTC mirror configured."
+
+# ──────────────────────────────────────────────
+# 10. Go (golang + GOPROXY mirror)
+# ──────────────────────────────────────────────
+next_step "Installing Go (GOPROXY.cn mirror)"
+
+GO_VERSION="1.24.3"
+GO_DIR="/usr/local/go"
+GO_TARBALL="go${GO_VERSION}.linux-amd64.tar.gz"
+
+if ! command_exists go; then
+    log "Downloading Go ${GO_VERSION}..."
+    ARCH=$(uname -m)
+    case "$ARCH" in
+        aarch* | armv8*) GO_TARBALL="go${GO_VERSION}.linux-arm64.tar.gz" ;;
+        armv7*) GO_TARBALL="go${GO_VERSION}.linux-armv6l.tar.gz" ;;
+        *) GO_TARBALL="go${GO_VERSION}.linux-amd64.tar.gz" ;;
+    esac
+
+    GO_DL_URL="https://dl.google.com/go/${GO_TARBALL}"
+    GO_MIRROR_URL="https://mirrors.ustc.edu.cn/golang/${GO_TARBALL}"
+
+    GO_TMP=$(mktemp -d)
+    start_spinner "Downloading Go $GO_VERSION"
+    if ! curl --progress-bar --fail -L "$GO_MIRROR_URL" -o "$GO_TMP/go.tar.gz" 2>/dev/null; then
+        stop_spinner
+        warn "USTC mirror failed, trying dl.google.com..."
+        start_spinner "Downloading Go from dl.google.com"
+        curl --progress-bar --fail -L "$GO_DL_URL" -o "$GO_TMP/go.tar.gz" || fail "Failed to download Go."
+    fi
+    stop_spinner
+
+    rm -rf "$GO_DIR"
+    tar -C /usr/local -xzf "$GO_TMP/go.tar.gz"
+    rm -rf "$GO_TMP"
+
+    ln -sf "$GO_DIR/bin/go" /usr/local/bin/go 2>/dev/null || true
+    ln -sf "$GO_DIR/bin/gofmt" /usr/local/bin/gofmt 2>/dev/null || true
+
+    GO_VER=$(go version | awk '{print $3}')
+    ok "Go $GO_VER installed."
+else
+    warn "Go already installed, skipping."
+fi
+
+log "Configuring Go for zsh..."
+GO_BLOCK="$CURRENT_USER_HOME/.zsh_go"
+if [[ -f "$GO_BLOCK" ]] && grep -q "zsh_go" "$ZSHRC" 2>/dev/null; then
+    warn "Go zsh config already exists, skipping."
+else
+    cat > "$GO_BLOCK" <<'EOF'
+export GOPATH="$HOME/go"
+export GOBIN="$GOPATH/bin"
+export PATH="/usr/local/go/bin:$GOBIN:$PATH"
+export GOPROXY=https://goproxy.cn,direct
+export GOSUMDB=sum.golang.google.cn
+EOF
+    chown "$CURRENT_USER:$CURRENT_USER" "$GO_BLOCK"
+
+    if ! grep -q "zsh_go" "$ZSHRC" 2>/dev/null; then
+        echo '' >> "$ZSHRC"
+        echo 'source $HOME/.zsh_go' >> "$ZSHRC"
+        chown "$CURRENT_USER:$CURRENT_USER" "$ZSHRC"
+    fi
+    source "$CURRENT_USER_HOME/.zsh_go" 2>/dev/null || true
+    ok "Go zsh config written."
+fi
+
+export GOPATH="$HOME/go"
+export GOBIN="$GOPATH/bin"
+export PATH="/usr/local/go/bin:$GOBIN:$PATH"
+export GOPROXY=https://goproxy.cn,direct
+
+go env -w GOPROXY=https://goproxy.cn,direct
+go env -w GOSUMDB=sum.golang.google.cn
+
+ok "Go $(go version 2>/dev/null | awk '{print $3}') + goproxy.cn configured."
+
+# ──────────────────────────────────────────────
 # Done
 # ──────────────────────────────────────────────
 SCRIPT_END=$(date +%s)
@@ -537,6 +693,8 @@ echo -e "${CYAN}  Python:${NC}   $(python3 --version)"
 echo -e "${CYAN}  pip:${NC}      $(pip3 --version | awk '{print $2}')"
 echo -e "${CYAN}  uv:${NC}       $(uv --version 2>/dev/null | awk '{print $2}' || echo 'not found')"
 echo -e "${CYAN}  gh:${NC}       $(gh --version 2>/dev/null | awk '{print $3}' | head -1 || echo 'not found')"
+echo -e "${CYAN}  Rust:${NC}     $(rustc --version 2>/dev/null | awk '{print $2}' || echo 'not found')"
+echo -e "${CYAN}  Go:${NC}       $(go version 2>/dev/null | awk '{print $3}' || echo 'not found')"
 echo -e "${CYAN}  Zsh:${NC}      $(zsh --version)"
 echo -e "${CYAN}  Shell:${NC}    zsh (for user $CURRENT_USER)"
 echo ""
